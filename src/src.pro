@@ -1,12 +1,7 @@
-TEMPLATE = app
-CONFIG = console warn_on release
-SOURCES = main.cpp pompom.cpp model.cpp encoder.cpp decoder.cpp
-TARGET = pompom
-DESTDIR = ../bin
-
-QMAKE_CXXFLAGS += -std=c++0x
-
-LIBS = -lpthread -lm -lboost_system -lboost_program_options
+TEMPLATE = subdirs
+SUBDIRS = common tests main
+tests.depends = common
+main.depends = common
 
 # ports
 macx {
@@ -16,4 +11,3 @@ macx {
 	INCLUDEPATH += /opt/local/include
 	LIBS += -L/opt/local/lib 
 }
-
