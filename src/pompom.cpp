@@ -17,7 +17,7 @@ using std::istream;
 using std::ostream;
 using std::endl;
 using std::flush;
-using std::auto_ptr;
+using std::unique_ptr;
 using std::fixed;
 using std::setprecision;
 using std::range_error;
@@ -37,29 +37,33 @@ long decompress(istream& in, ostream& out, ostream& err) {
 		return -1;
 	}
 
+	// Model order: 1 byte
+	uint8 order = in.get();
+
 	// Model memory limit: 2 bytes
-	unsigned short limit = ((in.get() << 8) | in.get());
+	uint16 limit = ((in.get() << 8) | in.get());
 
 	decoder dec(in);
-	auto_ptr<model> m( model::instance(limit) );
-	int dist[ R(EOS) + 1];
-	//memset(dist, 0, sizeof(dist));
+	unique_ptr<model> m( model::instance(order, limit) );
+	uint32 dist[ R(EOS) + 1 ];
 
 	// Read data: terminated by EOS symbol
 	crc_32_type crc;
-	long len = 0;
-	int c = 0;
+	uint64 len = 0;
+	uint16 c = 0;
 	while (!dec.eof()) {
 		// Seek character range
-		for (int ord = Order ; ord >= -1 ; --ord) {
+		for (int ord = m->Order ; ord >= -1 ; --ord) {
 			m->dist(ord, dist);
 			// Symbol c has frequency in context
 			if ((c = dec.decode(dist)) != Escape)
 				break;
 		} 
+#ifndef HAPPY_GO_LUCKY
 		if (c == Escape) {
-			throw range_error("character range leaked escape from");
+			throw range_error("seek character range leaked escape");
 		}
+#endif
 		if (c == EOS) {
 			break;
 		}
@@ -72,13 +76,13 @@ long decompress(istream& in, ostream& out, ostream& err) {
 		crc.process_byte(c);
 		++len;
 	}
-	if (in.eof()) {
+	if (dec.eof()) {
 		err << SELF << ": unexpected end of compressed data" << endl;
 		return -1;
 	}
 
 	// CRC check: 4 bytes
-	unsigned int v = 0;
+	uint32 v = 0;
 	char b = 0;
 	for (int i = 0 ; (i<4 && (in.get(b) >= 0)) ; ++i) {
 		v = ((v << 8) | (b & 0xFF));
@@ -92,33 +96,25 @@ long decompress(istream& in, ostream& out, ostream& err) {
 }
 
 long compress(istream& in, ostream& out,
-		ostream& err, const string& model_args) {
+		ostream& err, const uint8 order, const uint16 limit) {
 
-	// Model memory limit
-	unsigned short limit = 0;
-	if ((limit = atol(model_args.c_str())) == 0) {
-		err << SELF << ": memory limit '" << model_args 
-			<< "' is not an integer" << endl;
-		return -1;
-	}
+	unique_ptr<model> m( model::instance(order, limit) );
+	uint32 dist[ R(EOS) + 1 ];
 
-	// Out magic and memory limit
+	// Out magic, order and memory limit
 	out << Magia << (char)0x00;
+	out << (char)(order & 0xFF);
 	out << (char)(limit >> 8) << (char)(limit & 0xFF);
 
-	encoder enc(out);
-	auto_ptr<model> m( model::instance(limit) );
-	int dist[ R(EOS) + 1];
-	//memset(dist, 0, sizeof(dist));
-
 	// Write data: terminated by EOS symbol
+	encoder enc(out);
 	crc_32_type crc;
-	long len = 0;
-	char ch;
-	while (in.get(ch)) {
-		int c = (0xFF & ch);
+	uint64 len = 0;
+	char b;
+	while (in.get(b)) {
+		int c = (0xFF & b);
 		// Seek character range
-		for (int ord = Order ; ord >= -1 ; --ord) {
+		for (int ord = m->Order ; ord >= -1 ; --ord) {
 			m->dist(ord, dist);
 			// Symbol c has frequency in context
 			if (dist[ L(c) ] != dist[ R(c) ])
@@ -128,11 +124,13 @@ long compress(istream& in, ostream& out,
 		} 
 		
 		// Output
+#ifndef HAPPY_GO_LUCKY
 		if (dist[ L(c) ] == dist[ R(c) ]) {
 			throw range_error(
 				str ( format("zero frequency for symbol %1%") % (int)c ) 
 			);
 		}
+#endif
 		enc.encode(c, dist);
 
 		// Update model
@@ -141,29 +139,31 @@ long compress(istream& in, ostream& out,
 		++len;
 	}
 	// Escape to -1 level, output EOS
-	for (int ord = Order ; ord >= 0 ; --ord) {
+	for (int ord = m->Order ; ord >= 0 ; --ord) {
 		m->dist(ord, dist);
 		enc.encode(Escape, dist); 
 	} 
 	m->dist(-1, dist);
+#ifndef HAPPY_GO_LUCKY
 	if (dist[ L(EOS) ] == dist[ R(EOS) ]) {
 		throw range_error("zero frequency for EOS");
 	}
+#endif
 	enc.encode(EOS, dist);
 
 	// Write pending output 
 	enc.finish();
 	
 	// Write checksum: 4 bytes
-	unsigned int v = crc.checksum();
+	uint32 v = crc.checksum();
 	out << (char)(v >> 24) << (char)((v >> 16) & 0xFF) 
 		<< (char)((v >> 8) & 0xFF) << (char)(v & 0xFF);
 
-	long outlen = enc.len();
-	double bpc = ((outlen / (double)len) * 8.0);
+	uint64 outlen = enc.len();
+	double bpc = ((outlen / (double)len) * 8.0); // XXX
 	
 	err << SELF << ": in " << len << " -> out " << outlen << " at " 
-		<< fixed << setprecision(2) << bpc << " bpc" 
+		<< fixed << setprecision(3) << bpc << " bpc" 
 		<< endl << flush;
 	
 	return len;
