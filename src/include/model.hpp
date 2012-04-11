@@ -13,8 +13,13 @@
 #include <vector>
 #include <deque>
 #include <tr1/unordered_map>
+#include <boost/format.hpp>
 
 #include "pompom.hpp"
+#include "ppmtrie.hpp"
+
+using boost::str;
+using boost::format;
 
 namespace pompom {
 
@@ -25,10 +30,6 @@ public:
 	
 	// Give running totals of the symbols in context
 	void dist(const int16, uint32 *);
-
-	// Clean polluted entries
-	// @see http://research.microsoft.com/en-us/um/people/darkok/papers/DCC-ppm-cleaning.pdf 
-	void clean();
 
 	// Rescale when largest frequency has met limit
 	void rescale();
@@ -121,6 +122,74 @@ void model::dist(const int16 ord, uint32 * dist) {
 	dist[ R(EOS) ] = dist[ R(Escape) ] = run + (syms > 0 ? syms : 1); 
 
 	visit.push_back(t);
+}
+
+inline
+model * model::instance(const uint8 order, const uint16 limit) {
+	if (order < OrderMin || order > OrderMax) {
+		std::string err = str( format("accepted order is %1%-%2%") 
+				% (int)OrderMin % (int)OrderMax );
+		throw std::range_error(err);
+	}
+	if (limit < LimitMin || limit > LimitMax) {
+		std::string err = str( format("accepted limit is %1%-%2% MiB") 
+				% LimitMin % LimitMax );
+		throw std::range_error(err);
+	}
+	return new model(order, limit);
+}
+
+inline
+model::model(const uint8 order, const uint16 limit) 
+	: Order(order), Limit(limit) 
+{
+	visit.reserve(Order);
+
+	// TODO initialize trie
+}
+
+inline
+model::~model() {
+	// TODO delete trie
+}
+
+inline
+void model::update(const uint16 c) { 
+#ifndef HAPPY_GO_LUCKY
+	if (c > Alpha) {
+		throw std::range_error("update character out of range");
+	}
+#endif
+	// Check if maximum frequency would be met, rescale if necessary
+	bool outscale = false;
+	for (auto it = visit.begin() ; it != visit.end() ; it++ ) {
+		outscale = (outscale || nodecnt[((*it) << 8) | c] >= TopValue - 1);
+	}
+	if (outscale)
+		rescale();
+
+	// Update frequency of c from visited nodes
+	// Don't update lower order contexts ("update exclusion")
+	for (auto it = visit.begin() ; it != visit.end() ; it++ ) {
+		++nodecnt[((*it) << 8) | c];
+	}
+	visit.clear();
+
+	// Update text context
+	if (context.size() == Order)
+		context.pop_back();
+	context.push_front(c);
+
+}
+
+inline
+void model::rescale() {
+	// Rescale all entries
+	for (auto it = nodecnt.begin() ; it != nodecnt.end(); ++it) {
+		it->second >>= 1;
+		if (it->second < 1) 
+			it->second = 1;
+	}
 }
 
 } // namespace

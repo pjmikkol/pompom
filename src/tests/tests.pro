@@ -1,7 +1,7 @@
 SOURCES = coderstest.cpp
-DESTDIR = ../../bin
 TARGET = codertests
+include(../../common.pri)
 CONFIG = console warn_on
-QMAKE_CXXFLAGS += -std=c++0x
+QMAKE_CXXFLAGS += -g
 
 LIBS = -lboost_unit_test_framework

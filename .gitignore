@@ -4,3 +4,5 @@ Makefile
 pompom
 *.a
 codertests
+*.so
+*.so.*
